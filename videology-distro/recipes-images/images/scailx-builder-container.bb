@@ -74,7 +74,10 @@ IMAGE_INSTALL += " \
     htop \
     i2c-tools \
     pyhailort \
+    hailo-pci \
     hailortcli \
+    libgsthailo \
+    libhailort \
     amazon-kvs-producer-sdk-cpp \
     imx-g2d-samples \
     imx-m7-demos \

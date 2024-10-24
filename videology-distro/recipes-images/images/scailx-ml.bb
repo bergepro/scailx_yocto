@@ -43,6 +43,9 @@ IMAGE_INSTALL += " \
     i2c-tools \
     pyhailort \
     hailo-pci \
+    hailortcli \
+    libgsthailo \
+    libhailort \
     hailo-firmware \
     v4l-utils \
     v4l2loopback \
@@ -66,6 +69,7 @@ IMAGE_INSTALL += " \
     python3-pip \
     python3-periphery \
     kernel-module-crosslink-lvds2mipi \
+    kernel-module-rpi-touch \
     ${DOCKER} \
 "
 

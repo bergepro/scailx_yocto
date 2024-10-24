@@ -14,3 +14,7 @@ repos:
       patch0:
         path: kas/layers/hailo-nanbield.patch
         repo: scailx
+
+local_conf_header:
+  hailo: |
+    HAILORT_OFFLINE_BUILD_ENABLE="0"
