@@ -1,8 +1,8 @@
 From c8c41ebdab1c8bc6d873c4ac78a2acd178ef1f5e Mon Sep 17 00:00:00 2001
 From: Kobus Goosen <kgoosen@videologyinc.com>
 Date: Thu, 24 Oct 2024 11:55:54 +0200
-Subject: [PATCH] OF: DT-Overlay configfs interface (v8) Add a runtime
- interface to using configfs for generic device tree overlay usage. With it
+Subject: [PATCH] OF: DT-Overlay configfs interface (v8) Add a runtime 
+ interface to using configfs for generic device tree overlay usage. With it 
  its possible to use device tree overlays without having to use a per-platform
   overlay manager.
 
@@ -59,10 +59,10 @@ index da9826accb1b..76bba34c6b5d 100644
 +++ b/drivers/of/Kconfig
 @@ -100,6 +100,18 @@ config OF_OVERLAY
  	  enable it manually to improve device tree unit test coverage.
-
+ 
  config OF_NUMA
  	bool
-
+ 
 +config OF_CONFIGFS
 +	bool "Device Tree Overlay ConfigFS interface"
 +	default n
@@ -398,12 +398,12 @@ index a9a292d6d59b..46e044cc9a56 100644
  		ret = of_changeset_update_property(&ovcs->cset, target->np,
  						   new_prop);
  	}
-
+ 
  	if (!of_node_check_flag(target->np, OF_OVERLAY))
 -		pr_err("WARNING: memory leak will occur if overlay removed, property: %pOF/%s\n",
 +		pr_warn("WARNING: memory leak will occur if overlay removed, property: %pOF/%s\n",
  		       target->np, new_prop->name);
-
+ 
  	if (ret) {
  		kfree(new_prop->name);
  		kfree(new_prop->value);
@@ -412,15 +412,15 @@ index a9a292d6d59b..46e044cc9a56 100644
  	if (ret_tmp)
  		if (!ret)
  			ret = ret_tmp;
-
+ 
 +	/* Wait for completion of call_rcu()'s */
 +	rcu_barrier();
 +
  	free_overlay_changeset(ovcs);
-
+ 
  err_unlock:
  	/*
  	 * If jumped over free_overlay_changeset(), then did not kfree()
---
+-- 
 2.34.1
 

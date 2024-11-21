@@ -84,5 +84,6 @@
         "*.inc": "bitbake"
     },
     "python.languageServer": "None",
-    "C_Cpp.intelliSenseEngine": "disabled"
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "mesonbuild.selectRootDir": false
 }
