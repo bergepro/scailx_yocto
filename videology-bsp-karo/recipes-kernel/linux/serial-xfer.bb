@@ -1,4 +1,4 @@
-DESCRIPTION = "Serial transfer unitility to help crosslink send proper visca commands."
+DESCRIPTION = "Serial transfer unitility to help lvds2mipi send proper visca commands."
 
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://${COREBASE}/meta/files/common-licenses/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"

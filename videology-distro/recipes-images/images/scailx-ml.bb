@@ -52,7 +52,8 @@ IMAGE_INSTALL += " \
     v4l2loopback-utils \
     python3-pyserial \
     gst-variable-rtsp-server \
-    kernel-module-crosslink-lvds2mipi \
+    lvds2mipi-module \
+    python3-lvds2mipi \
     kernel-module-gs-ar0234 \
     python3-ar0234 \
     packagegroup-imx-core-tools \
