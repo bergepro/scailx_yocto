@@ -4,7 +4,7 @@ LICENSE = "MIT"
 # PACKAGE_INSTALL = " "
 
 IMAGE_FEATURES = ""
-IMAGE_INSTALL = " karo-devicetrees "
+IMAGE_INSTALL = " scailx-devicetrees "
 
 DEPENDS += "scailx-boot-script "
 export IMAGE_BASENAME = "scailx-bootstrap-image"
