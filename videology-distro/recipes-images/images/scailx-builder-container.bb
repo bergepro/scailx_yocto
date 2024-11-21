@@ -73,6 +73,7 @@ IMAGE_INSTALL += " \
     nginx \
     fluentbit \
     htop \
+    clang \
     i2c-tools \
     pyhailort \
     hailo-pci \
