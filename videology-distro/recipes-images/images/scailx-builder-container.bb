@@ -25,6 +25,9 @@ IMAGE_FEATURES = " \
     package-management \
     ssh-server-openssh \
     hwcodecs \
+    splash \
+    weston x11 \
+    tools-testapps \
 "
 IMAGE_LINGUAS = ""
 NO_RECOMMENDATIONS = "1"

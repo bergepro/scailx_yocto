@@ -48,6 +48,7 @@ IMAGE_INSTALL += " \
     libhailort \
     hailo-firmware \
     v4l-utils \
+    media-ctl \
     v4l2loopback \
     v4l2loopback-utils \
     python3-pyserial \
@@ -70,7 +71,6 @@ IMAGE_INSTALL += " \
     python3-pip \
     python3-periphery \
     kernel-module-crosslink-lvds2mipi \
-    kernel-module-rpi-touch \
     ${DOCKER} \
 "
 
