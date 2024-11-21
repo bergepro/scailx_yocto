@@ -70,6 +70,7 @@ IMAGE_INSTALL += " \
     nodejs \
     nodejs-npm \
     go \
+    nginx \
     fluentbit \
     htop \
     i2c-tools \

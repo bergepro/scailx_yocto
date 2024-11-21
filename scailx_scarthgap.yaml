@@ -16,6 +16,7 @@ header:
     - kas/layers/meta-security.yml
     - kas/layers/meta-hailo.yml
     - kas/layers/meta-aws.yml
+    - kas/layers/meta-webserver.yml
 
 repos:
   scailx:
