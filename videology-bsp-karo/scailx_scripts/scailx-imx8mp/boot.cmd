@@ -16,7 +16,7 @@ else
 	load ${devtype} ${devnum}:${distro_bootpart} ${kernel_addr_r} bsp${bootslot}/Image-initramfs;
 fi'
 
-setenv load_dtb_options 'load ${devtype} ${devnum}:${distro_bootpart} ${fdt_addr_r} bsp${bootslot}/devicetree/default.dtb && fdt addr ${fdt_addr_r}'
+setenv load_dtb_options 'load ${devtype} ${devnum}:${distro_bootpart} ${fdt_addr_r} bsp${bootslot}/devicetree/default.dtb && fdt addr ${fdt_addr_r} && fdt resize 16384'
 setenv load_dtb_overlay_options ' \
 setenv overlay_error "false"; \
 for overlay_file in ${overlays}; do
