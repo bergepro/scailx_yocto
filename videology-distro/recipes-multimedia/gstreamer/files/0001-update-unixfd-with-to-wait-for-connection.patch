@@ -1,0 +1,585 @@
+From 81deed58a19230848bb884085aec43b6439c4393 Mon Sep 17 00:00:00 2001
+From: Kobus Goosen <kgoosen@videologyinc.com>
+Date: Mon, 25 Nov 2024 11:40:25 +0100
+Subject: [PATCH] update unixfd with to wait for connection
+
+---
+ docs/plugins/gst_plugins_cache.json |  12 ++++
+ gst/unixfd/gstunixfdsink.c          | 107 +++++++++++++++++++++++++---
+ gst/unixfd/gstunixfdsrc.c           | 107 ++++++++++++++++------------
+ tests/check/elements/unixfd.c       | 103 ++++++++++++++++++++++++--
+ 4 files changed, 269 insertions(+), 60 deletions(-)
+
+diff --git a/docs/plugins/gst_plugins_cache.json b/docs/plugins/gst_plugins_cache.json
+index 022454cac..7d74da2f3 100644
+--- a/docs/plugins/gst_plugins_cache.json
++++ b/docs/plugins/gst_plugins_cache.json
+@@ -241524,6 +241524,18 @@
+                         "readable": true,
+                         "type": "GUnixSocketAddressType",
+                         "writable": true
++                    },
++                    "wait-for-connection": {
++                        "blurb": "Block the stream until a least one client is connected",
++                        "conditionally-available": false,
++                        "construct": true,
++                        "construct-only": false,
++                        "controllable": false,
++                        "default": "false",
++                        "mutable": "null",
++                        "readable": true,
++                        "type": "gboolean",
++                        "writable": true
+                     }
+                 },
+                 "rank": "none"
+diff --git a/gst/unixfd/gstunixfdsink.c b/gst/unixfd/gstunixfdsink.c
+index 0e7dd8cde..7b45e3092 100644
+--- a/gst/unixfd/gstunixfdsink.c
++++ b/gst/unixfd/gstunixfdsink.c
+@@ -87,6 +87,10 @@ struct _GstUnixFdSink
+   GstCaps *caps;
+   gboolean uses_monotonic_clock;
+   GByteArray *payload;
++
++  gboolean wait_for_connection;
++  GCond wait_for_connection_cond;
++  gboolean unlock;
+ };
+ 
+ G_DEFINE_TYPE (GstUnixFdSink, gst_unix_fd_sink, GST_TYPE_BASE_SINK);
+@@ -94,12 +98,14 @@ GST_ELEMENT_REGISTER_DEFINE (unixfdsink, "unixfdsink", GST_RANK_NONE,
+     GST_TYPE_UNIX_FD_SINK);
+ 
+ #define DEFAULT_SOCKET_TYPE G_UNIX_SOCKET_ADDRESS_PATH
++#define DEFAULT_WAIT_FOR_CONNECTION FALSE
+ 
+ enum
+ {
+   PROP_0,
+   PROP_SOCKET_PATH,
+   PROP_SOCKET_TYPE,
++  PROP_WAIT_FOR_CONNECTION,
+ };
+ 
+ 
+@@ -122,6 +128,7 @@ gst_unix_fd_sink_init (GstUnixFdSink * self)
+   self->clients =
+       g_hash_table_new_full (NULL, NULL, g_object_unref,
+       (GDestroyNotify) client_free);
++  g_cond_init (&self->wait_for_connection_cond);
+ }
+ 
+ static void
+@@ -133,6 +140,7 @@ gst_unix_fd_sink_finalize (GObject * object)
+   g_main_context_unref (self->context);
+   g_main_loop_unref (self->loop);
+   g_hash_table_unref (self->clients);
++  g_cond_clear (&self->wait_for_connection_cond);
+ 
+   G_OBJECT_CLASS (gst_unix_fd_sink_parent_class)->finalize (object);
+ }
+@@ -163,6 +171,10 @@ gst_unix_fd_sink_set_property (GObject * object, guint prop_id,
+       }
+       self->socket_type = g_value_get_enum (value);
+       break;
++    case PROP_WAIT_FOR_CONNECTION:
++      self->wait_for_connection = g_value_get_boolean (value);
++      g_cond_signal (&self->wait_for_connection_cond);
++      break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+       break;
+@@ -186,6 +198,9 @@ gst_unix_fd_sink_get_property (GObject * object, guint prop_id,
+     case PROP_SOCKET_TYPE:
+       g_value_set_enum (value, self->socket_type);
+       break;
++    case PROP_WAIT_FOR_CONNECTION:
++      g_value_set_boolean (value, self->wait_for_connection);
++      break;
+     default:
+       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+       break;
+@@ -314,6 +329,8 @@ new_client_cb (GSocket * socket, GIOCondition cond, gpointer user_data)
+   }
+   g_free (payload);
+ 
++  g_cond_signal (&self->wait_for_connection_cond);
++
+   GST_OBJECT_UNLOCK (self);
+ 
+   return G_SOURCE_CONTINUE;
+@@ -428,12 +445,22 @@ send_command_to_all (GstUnixFdSink * self, CommandType type, GUnixFDList * fds,
+ }
+ 
+ static GstClockTime
+-calculate_timestamp (GstClockTime timestamp, GstClockTime base_time,
+-    GstClockTime latency, GstClockTimeDiff clock_diff)
++to_monotonic (GstClockTime timestamp, const GstSegment * segment,
++    GstClockTime base_time, GstClockTime latency, GstClockTimeDiff clock_diff)
+ {
+   if (GST_CLOCK_TIME_IS_VALID (timestamp)) {
+     /* Convert running time to pipeline clock time */
+-    timestamp += base_time;
++    gint res =
++        gst_segment_to_running_time_full (segment, GST_FORMAT_TIME, timestamp,
++        &timestamp);
++    if (res == 0)
++      return GST_CLOCK_TIME_NONE;
++    else if (res > 0)
++      timestamp += base_time;
++    else if (base_time > timestamp)
++      timestamp = base_time - timestamp;
++    else
++      timestamp = 0;
+     if (GST_CLOCK_TIME_IS_VALID (latency))
+       timestamp += latency;
+     /* Convert to system monotonic clock time */
+@@ -485,11 +512,11 @@ gst_unix_fd_sink_render (GstBaseSink * bsink, GstBuffer * buffer)
+    * id so we know which buffer to unref. */
+   new_buffer->id = (guint64) buffer;
+   new_buffer->pts =
+-      calculate_timestamp (GST_BUFFER_PTS (buffer), base_time, latency,
+-      clock_diff);
++      to_monotonic (GST_BUFFER_PTS (buffer),
++      &GST_BASE_SINK_CAST (self)->segment, base_time, latency, clock_diff);
+   new_buffer->dts =
+-      calculate_timestamp (GST_BUFFER_DTS (buffer), base_time, latency,
+-      clock_diff);
++      to_monotonic (GST_BUFFER_DTS (buffer),
++      &GST_BASE_SINK_CAST (self)->segment, base_time, latency, clock_diff);
+   new_buffer->duration = GST_BUFFER_DURATION (buffer);
+   new_buffer->offset = GST_BUFFER_OFFSET (buffer);
+   new_buffer->offset_end = GST_BUFFER_OFFSET_END (buffer);
+@@ -498,6 +525,15 @@ gst_unix_fd_sink_render (GstBaseSink * bsink, GstBuffer * buffer)
+   new_buffer->n_memory = n_memory;
+   new_buffer->n_meta = n_meta;
+ 
++  if ((GST_BUFFER_PTS_IS_VALID (buffer)
++          && !GST_CLOCK_TIME_IS_VALID (new_buffer->pts))
++      || (GST_BUFFER_DTS_IS_VALID (buffer)
++          && !GST_CLOCK_TIME_IS_VALID (new_buffer->dts))) {
++    GST_ERROR_OBJECT (self,
++        "Could not convert buffer timestamp to running time");
++    return GST_FLOW_ERROR;
++  }
++
+   gboolean dmabuf_count = 0;
+   GUnixFDList *fds = g_unix_fd_list_new ();
+   for (int i = 0; i < n_memory; i++) {
+@@ -532,8 +568,21 @@ gst_unix_fd_sink_render (GstBaseSink * bsink, GstBuffer * buffer)
+     new_buffer->type = MEMORY_TYPE_DMABUF;
+ 
+   GST_OBJECT_LOCK (self);
++
++  while (self->wait_for_connection && g_hash_table_size (self->clients) == 0) {
++    g_cond_wait (&self->wait_for_connection_cond, GST_OBJECT_GET_LOCK (self));
++    if (self->unlock) {
++      GST_OBJECT_UNLOCK (self);
++      ret = gst_base_sink_wait_preroll (bsink);
++      if (ret != GST_FLOW_OK)
++        goto out;
++      GST_OBJECT_LOCK (self);
++    }
++  }
++
+   send_command_to_all (self, COMMAND_TYPE_NEW_BUFFER, fds,
+       self->payload->data, self->payload->len, buffer);
++
+   GST_OBJECT_UNLOCK (self);
+ 
+ out:
+@@ -542,6 +591,31 @@ out:
+   return ret;
+ }
+ 
++static gboolean
++gst_unix_fd_sink_unlock (GstBaseSink * bsink)
++{
++  GstUnixFdSink *self = (GstUnixFdSink *) bsink;
++
++  GST_OBJECT_LOCK (self);
++  self->unlock = TRUE;
++  g_cond_signal (&self->wait_for_connection_cond);
++  GST_OBJECT_UNLOCK (self);
++
++  return TRUE;
++}
++
++static gboolean
++gst_unix_fd_sink_unlock_stop (GstBaseSink * bsink)
++{
++  GstUnixFdSink *self = (GstUnixFdSink *) bsink;
++
++  GST_OBJECT_LOCK (self);
++  self->unlock = FALSE;
++  GST_OBJECT_UNLOCK (self);
++
++  return TRUE;
++}
++
+ static gboolean
+ gst_unix_fd_sink_event (GstBaseSink * bsink, GstEvent * event)
+ {
+@@ -631,6 +705,9 @@ gst_unix_fd_sink_class_init (GstUnixFdSinkClass * klass)
+   gstbasesink_class->event = GST_DEBUG_FUNCPTR (gst_unix_fd_sink_event);
+   gstbasesink_class->propose_allocation =
+       GST_DEBUG_FUNCPTR (gst_unix_fd_sink_propose_allocation);
++  gstbasesink_class->unlock = GST_DEBUG_FUNCPTR (gst_unix_fd_sink_unlock);
++  gstbasesink_class->unlock_stop =
++      GST_DEBUG_FUNCPTR (gst_unix_fd_sink_unlock_stop);
+ 
+   g_object_class_install_property (gobject_class, PROP_SOCKET_PATH,
+       g_param_spec_string ("socket-path",
+@@ -647,4 +724,18 @@ gst_unix_fd_sink_class_init (GstUnixFdSinkClass * klass)
+           G_TYPE_UNIX_SOCKET_ADDRESS_TYPE, DEFAULT_SOCKET_TYPE,
+           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
+           GST_PARAM_MUTABLE_READY));
+-}
++
++  /**
++   * GstUnixFdSink:wait-for-connection:
++   *
++   * Block the stream until a least one client is connected.
++   *
++   * Since: 1.26
++   */
++  g_object_class_install_property (gobject_class, PROP_WAIT_FOR_CONNECTION,
++      g_param_spec_boolean ("wait-for-connection",
++          "Wait for a connection until rendering",
++          "Block the stream until a least one client is connected",
++          DEFAULT_WAIT_FOR_CONNECTION,
++          G_PARAM_READWRITE | G_PARAM_CONSTRUCT | G_PARAM_STATIC_STRINGS));
++}
+\ No newline at end of file
+diff --git a/gst/unixfd/gstunixfdsrc.c b/gst/unixfd/gstunixfdsrc.c
+index 39f375382..4090f65fb 100644
+--- a/gst/unixfd/gstunixfdsrc.c
++++ b/gst/unixfd/gstunixfdsrc.c
+@@ -89,31 +89,34 @@ typedef struct
+   guint n_memory;
+ } BufferContext;
+ 
++static void
++release_buffer (GstUnixFdSrc * self, guint64 id)
++{
++  /* Notify that we are not using this buffer anymore */
++  ReleaseBufferPayload payload = { id };
++  GError *error = NULL;
++  if (!gst_unix_fd_send_command (self->socket, COMMAND_TYPE_RELEASE_BUFFER,
++          NULL, (guint8 *) & payload, sizeof (payload), &error)) {
++    GST_WARNING_OBJECT (self, "Failed to send release-buffer command: %s",
++        error->message);
++    g_clear_error (&error);
++  }
++}
++
+ static void
+ memory_weak_ref_cb (GstUnixFdSrc * self, GstMemory * mem)
+ {
+   GST_OBJECT_LOCK (self);
+ 
+   BufferContext *ctx = g_hash_table_lookup (self->memories, mem);
+-  if (ctx == NULL)
+-    goto out;
+-
+-  if (--ctx->n_memory == 0) {
+-    /* Notify that we are not using this buffer anymore */
+-    ReleaseBufferPayload payload = { ctx->id };
+-    GError *error = NULL;
+-    if (!gst_unix_fd_send_command (self->socket, COMMAND_TYPE_RELEASE_BUFFER,
+-            NULL, (guint8 *) & payload, sizeof (payload), &error)) {
+-      GST_WARNING_OBJECT (self, "Failed to send release-buffer command: %s",
+-          error->message);
+-      g_clear_error (&error);
++  if (ctx != NULL) {
++    if (--ctx->n_memory == 0) {
++      release_buffer (self, ctx->id);
++      g_free (ctx);
+     }
+-    g_free (ctx);
++    g_hash_table_remove (self->memories, mem);
+   }
+ 
+-  g_hash_table_remove (self->memories, mem);
+-
+-out:
+   GST_OBJECT_UNLOCK (self);
+ }
+ 
+@@ -279,7 +282,7 @@ gst_unix_fd_src_unlock_stop (GstBaseSrc * bsrc)
+ }
+ 
+ static GstClockTime
+-calculate_timestamp (GstClockTime timestamp, GstClockTime base_time,
++from_monotonic (GstClockTime timestamp, GstClockTime base_time,
+     GstClockTimeDiff clock_diff)
+ {
+   if (GST_CLOCK_TIME_IS_VALID (timestamp)) {
+@@ -295,6 +298,14 @@ calculate_timestamp (GstClockTime timestamp, GstClockTime base_time,
+   return timestamp;
+ }
+ 
++static void
++close_and_free_fds (gint * fds, gint fds_len)
++{
++  for (int i = 0; i < fds_len; i++)
++    g_close (fds[i], NULL);
++  g_free (fds);
++}
++
+ static GstFlowReturn
+ gst_unix_fd_src_create (GstPushSrc * psrc, GstBuffer ** outbuf)
+ {
+@@ -335,33 +346,26 @@ again:
+         goto on_error;
+       }
+ 
+-      if (fds == NULL) {
+-        GST_ERROR_OBJECT (self,
+-            "Received new buffer command without file descriptors");
+-        return GST_FLOW_ERROR;
+-      }
+-
+-      if (g_unix_fd_list_get_length (fds) != new_buffer->n_memory) {
++      gint fds_arr_len = 0;
++      gint *fds_arr =
++          (fds != NULL) ? g_unix_fd_list_steal_fds (fds, &fds_arr_len) : NULL;
++      if (fds_arr_len != new_buffer->n_memory) {
+         GST_ERROR_OBJECT (self,
+             "Received new buffer command with %d file descriptors instead of "
+-            "%d", g_unix_fd_list_get_length (fds), new_buffer->n_memory);
++            "%d", fds_arr_len, new_buffer->n_memory);
+         ret = GST_FLOW_ERROR;
++        close_and_free_fds (fds_arr, fds_arr_len);
+         goto on_error;
+       }
+ 
+       if (new_buffer->type >= MEMORY_TYPE_LAST) {
+         GST_ERROR_OBJECT (self, "Unknown buffer type %d", new_buffer->type);
+         ret = GST_FLOW_ERROR;
++        close_and_free_fds (fds_arr, fds_arr_len);
+         goto on_error;
+       }
+       GstAllocator *allocator = self->allocators[new_buffer->type];
+ 
+-      gint *fds_arr = g_unix_fd_list_steal_fds (fds, NULL);
+-
+-      BufferContext *ctx = g_new0 (BufferContext, 1);
+-      ctx->id = new_buffer->id;
+-      ctx->n_memory = new_buffer->n_memory;
+-
+       *outbuf = gst_buffer_new ();
+ 
+       GstClockTime base_time =
+@@ -373,9 +377,9 @@ again:
+       }
+ 
+       GST_BUFFER_PTS (*outbuf) =
+-          calculate_timestamp (new_buffer->pts, base_time, clock_diff);
++          from_monotonic (new_buffer->pts, base_time, clock_diff);
+       GST_BUFFER_DTS (*outbuf) =
+-          calculate_timestamp (new_buffer->dts, base_time, clock_diff);
++          from_monotonic (new_buffer->dts, base_time, clock_diff);
+       GST_BUFFER_DURATION (*outbuf) = new_buffer->duration;
+       GST_BUFFER_OFFSET (*outbuf) = new_buffer->offset;
+       GST_BUFFER_OFFSET_END (*outbuf) = new_buffer->offset_end;
+@@ -388,24 +392,35 @@ again:
+         if (consumed == 0) {
+           GST_ERROR_OBJECT (self, "Malformed meta serialization");
+           ret = GST_FLOW_ERROR;
++          close_and_free_fds (fds_arr, fds_arr_len);
++          gst_clear_buffer (outbuf);
+           goto on_error;
+         }
+         payload_off += consumed;
+       }
+ 
+       GST_OBJECT_LOCK (self);
+-      for (int i = 0; i < new_buffer->n_memory; i++) {
+-        GstMemory *mem = gst_fd_allocator_alloc (allocator, fds_arr[i],
+-            new_buffer->memories[i].size, GST_FD_MEMORY_FLAG_NONE);
+-        gst_memory_resize (mem, new_buffer->memories[i].offset,
+-            new_buffer->memories[i].size);
+-        GST_MINI_OBJECT_FLAG_SET (mem, GST_MEMORY_FLAG_READONLY);
+-
+-        g_hash_table_insert (self->memories, mem, ctx);
+-        gst_mini_object_weak_ref (GST_MINI_OBJECT_CAST (mem),
+-            (GstMiniObjectNotify) memory_weak_ref_cb, self);
+-
+-        gst_buffer_append_memory (*outbuf, mem);
++      if (new_buffer->n_memory > 0) {
++        BufferContext *ctx = g_new0 (BufferContext, 1);
++        ctx->id = new_buffer->id;
++        ctx->n_memory = new_buffer->n_memory;
++        for (int i = 0; i < new_buffer->n_memory; i++) {
++          GstMemory *mem = gst_fd_allocator_alloc (allocator, fds_arr[i],
++              new_buffer->memories[i].size, GST_FD_MEMORY_FLAG_NONE);
++          gst_memory_resize (mem, new_buffer->memories[i].offset,
++              new_buffer->memories[i].size);
++          GST_MINI_OBJECT_FLAG_SET (mem, GST_MEMORY_FLAG_READONLY);
++
++          g_hash_table_insert (self->memories, mem, ctx);
++          gst_mini_object_weak_ref (GST_MINI_OBJECT_CAST (mem),
++              (GstMiniObjectNotify) memory_weak_ref_cb, self);
++
++          gst_buffer_append_memory (*outbuf, mem);
++        }
++      } else {
++        /* This buffer has no memories, we can release it immediately otherwise
++         * it gets leaked. */
++        release_buffer (self, new_buffer->id);
+       }
+       GST_OBJECT_UNLOCK (self);
+ 
+@@ -510,4 +525,4 @@ gst_unix_fd_src_class_init (GstUnixFdSrcClass * klass)
+           G_TYPE_UNIX_SOCKET_ADDRESS_TYPE, DEFAULT_SOCKET_TYPE,
+           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_CONSTRUCT |
+           GST_PARAM_MUTABLE_READY));
+-}
++}
+\ No newline at end of file
+diff --git a/tests/check/elements/unixfd.c b/tests/check/elements/unixfd.c
+index ec98805dd..aeb8b9c18 100644
+--- a/tests/check/elements/unixfd.c
++++ b/tests/check/elements/unixfd.c
+@@ -25,6 +25,7 @@
+ 
+ #include <gst/gst.h>
+ #include <gst/check/gstcheck.h>
++#include <gst/app/app.h>
+ #include <glib/gstdio.h>
+ 
+ static void
+@@ -58,11 +59,9 @@ GST_START_TEST (test_unixfd_videotestsrc)
+   gst_meta_register_custom ("unix-fd-custom-meta", tags, NULL, NULL, NULL);
+ 
+   /* Ensure we don't have socket from previous failed test */
+-  gchar *socket_path =
+-      g_strdup_printf ("%s/unixfd-test-socket", g_get_user_runtime_dir ());
+-  if (g_file_test (socket_path, G_FILE_TEST_EXISTS)) {
+-    g_unlink (socket_path);
+-  }
++  gchar *tempdir = g_dir_make_tmp ("unixfd-test-XXXXXX", &error);
++  g_assert_no_error (error);
++  gchar *socket_path = g_strdup_printf ("%s/socket", tempdir);
+ 
+   /* Setup source */
+   gchar *pipeline_str =
+@@ -125,6 +124,9 @@ GST_START_TEST (test_unixfd_videotestsrc)
+           GST_STATE_NULL) == GST_STATE_CHANGE_SUCCESS);
+   fail_if (g_file_test (socket_path, G_FILE_TEST_EXISTS));
+ 
++  g_rmdir (tempdir);
++  g_free (tempdir);
++
+   gst_object_unref (pipeline_service);
+   gst_object_unref (pipeline_client_1);
+   gst_object_unref (pipeline_client_2);
+@@ -134,6 +136,94 @@ GST_START_TEST (test_unixfd_videotestsrc)
+ 
+ GST_END_TEST;
+ 
++GST_START_TEST (test_unixfd_segment)
++{
++  GError *error = NULL;
++
++  /* Ensure we don't have socket from previous failed test */
++  gchar *tempdir = g_dir_make_tmp ("unixfd-test-XXXXXX", &error);
++  g_assert_no_error (error);
++  gchar *socket_path = g_strdup_printf ("%s/socket", tempdir);
++
++  GstCaps *caps = gst_caps_new_empty_simple ("video/x-raw");
++
++  /* Setup service */
++  gchar *pipeline_str =
++      g_strdup_printf
++      ("appsrc name=src format=time handle-segment-change=true ! unixfdsink socket-path=%s sync=false async=false wait-for-connection=true",
++      socket_path);
++  GstElement *pipeline_service = gst_parse_launch (pipeline_str, &error);
++  g_assert_no_error (error);
++  fail_unless (gst_element_set_state (pipeline_service,
++          GST_STATE_PLAYING) == GST_STATE_CHANGE_SUCCESS);
++  GstElement *appsrc = gst_bin_get_by_name (GST_BIN (pipeline_service), "src");
++  gst_object_unref (appsrc);
++  g_free (pipeline_str);
++
++  /* Setup client */
++  pipeline_str =
++      g_strdup_printf
++      ("unixfdsrc socket-path=%s ! appsink name=sink sync=false async=false",
++      socket_path);
++  GstElement *pipeline_client = gst_parse_launch (pipeline_str, &error);
++  g_assert_no_error (error);
++  fail_unless (gst_element_set_state (pipeline_client,
++          GST_STATE_PLAYING) == GST_STATE_CHANGE_SUCCESS);
++  GstElement *appsink = gst_bin_get_by_name (GST_BIN (pipeline_client), "sink");
++  gst_object_unref (appsink);
++  g_free (pipeline_str);
++
++  /* Send a buffer with PTS=30s */
++  GstSegment segment;
++  gst_segment_init (&segment, GST_FORMAT_TIME);
++  GstBuffer *buf = gst_buffer_new ();
++  GST_BUFFER_PTS (buf) = 30 * GST_SECOND;
++  GstSample *sample = gst_sample_new (buf, caps, &segment, NULL);
++  gst_app_src_push_sample (GST_APP_SRC (appsrc), sample);
++  gst_sample_unref (sample);
++  gst_buffer_unref (buf);
++
++  /* Wait for it */
++  sample = gst_app_sink_pull_sample (GST_APP_SINK (appsink));
++  buf = gst_sample_get_buffer (sample);
++  GstClockTime first_pts = GST_BUFFER_PTS (buf);
++  gst_sample_unref (sample);
++
++  /* Send a buffer with PTS=1s but with 30s offset in the segment */
++  segment.base = 30 * GST_SECOND;
++  buf = gst_buffer_new ();
++  GST_BUFFER_PTS (buf) = 1 * GST_SECOND;
++  sample = gst_sample_new (buf, caps, &segment, NULL);
++  gst_app_src_push_sample (GST_APP_SRC (appsrc), sample);
++  gst_sample_unref (sample);
++  gst_buffer_unref (buf);
++
++  /* Wait for it */
++  sample = gst_app_sink_pull_sample (GST_APP_SINK (appsink));
++  buf = gst_sample_get_buffer (sample);
++  GstClockTime second_pts = GST_BUFFER_PTS (buf);
++  gst_sample_unref (sample);
++
++  /* They should be 1s appart */
++  fail_unless_equals_uint64 (second_pts - first_pts, GST_SECOND);
++
++  /* Teardown */
++  fail_unless (gst_element_set_state (pipeline_client,
++          GST_STATE_NULL) == GST_STATE_CHANGE_SUCCESS);
++  fail_unless (gst_element_set_state (pipeline_service,
++          GST_STATE_NULL) == GST_STATE_CHANGE_SUCCESS);
++
++  g_rmdir (tempdir);
++  g_free (tempdir);
++
++  gst_object_unref (pipeline_service);
++  gst_object_unref (pipeline_client);
++  g_free (socket_path);
++  gst_caps_unref (caps);
++}
++
++GST_END_TEST;
++
+ static Suite *
+ unixfd_suite (void)
+ {
+@@ -142,8 +232,9 @@ unixfd_suite (void)
+ 
+   suite_add_tcase (s, tc);
+   tcase_add_test (tc, test_unixfd_videotestsrc);
++  tcase_add_test (tc, test_unixfd_segment);
+ 
+   return s;
+ }
+ 
+-GST_CHECK_MAIN (unixfd);
++GST_CHECK_MAIN (unixfd);
+\ No newline at end of file
