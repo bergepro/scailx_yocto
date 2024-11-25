@@ -3,8 +3,7 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 SRC_URI:append = " file://swupdate "
 SRC_URI:append = " file://storage "
 SRC_URI:append = " file://pstree "
-SRC_URI:append = " file://i2cdetect file://cam-overlays "
-# SRC_URI:append = " file://disk-format "
+SRC_URI:append = " file://i2cdetect "
 SRC_URI:append = " file://cryptfs file://cryptfs_pkcs11 file://cryptfs_tpm2 "
 
 PACKAGES  += " initramfs-module-swupdate "
@@ -23,8 +22,6 @@ do_install:append() {
     # install -m 0755 ${WORKDIR}/storage-overlay ${D}/init.d/90-storage-overlay
     # i2cdetect
     install -m 0755 ${WORKDIR}/i2cdetect ${D}/init.d/65-i2cdetect
-    install -d ${D}${sysconfdir}/
-    install -m 0644 ${WORKDIR}/cam-overlays ${D}${sysconfdir}/
     # pstree
     install -d ${D}${base_bindir}/
     install -m 0755 ${WORKDIR}/pstree ${D}${base_bindir}/pstree
@@ -45,8 +42,8 @@ RDEPENDS:initramfs-module-storage = "${PN}-base util-linux-findfs cryptsetup e2f
 FILES:initramfs-module-storage = "/init.d/60-storage"
 
 SUMMARY:initramfs-module-i2cdetect = "initramfs support for autoloading devicetree-overlays based on I2C devices and overlay file"
-RDEPENDS:initramfs-module-i2cdetect = "${PN}-base i2c-tools udev-rules-scailx"
-FILES:initramfs-module-i2cdetect = "/init.d/65-i2cdetect ${sysconfdir}/cam-overlays"
+RDEPENDS:initramfs-module-i2cdetect = "${PN}-base i2c-tools udev-rules-scailx ${PREFERRED_PROVIDER_virtual/dtb}"
+FILES:initramfs-module-i2cdetect = "/init.d/65-i2cdetect "
 
 SUMMARY:initramfs-module-cryptfs = "initramfs support for encrypted filesystems"
 RDEPENDS:initramfs-module-cryptfs = "${PN}-base libgcc e2fsprogs-resize2fs e2fsprogs-e2fsck e2fsprogs-dumpe2fs "

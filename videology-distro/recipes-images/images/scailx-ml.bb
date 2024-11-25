@@ -70,7 +70,6 @@ IMAGE_INSTALL += " \
     python3-pycairo \
     python3-pip \
     python3-periphery \
-    kernel-module-crosslink-lvds2mipi \
     ${DOCKER} \
 "
 
