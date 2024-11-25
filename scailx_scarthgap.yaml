@@ -25,10 +25,12 @@ repos:
       videology-distro:
   meta-imx:
     # use latest branch commit.
-    # commit: ae04eecd48e557437ec90366795b8cf202d0ce14
+    commit: 6678028145763e90524d4e3ddf6b021224c9656f
   meta-swupdate:
     # Fix top before image-linkname removal
     commit: 3421a7063a58e4e027130326ab3acccbe3230b30
+  meta-browser:
+    commit: 40ef1d0799124a36b22df11a7562868c0edb23b1
 
 bblayers_conf_header:
   standard: |
