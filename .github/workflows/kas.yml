@@ -12,12 +12,18 @@
 name: kas build
 
 on:
+  workflow_dispatch:
+    inputs:
+      package_index:
+        type: boolean
+        description: 'Build package index'
+        default: true
   push:
     tags:
       - 'v*'
 
 env:
-  RELEASE: nanbield
+  RELEASE: scarthgap
   LANG: "en_US.UTF-8"
   KAS_ALLOW_ROOT: yes
   PACKAGE_FEED_GPG_PASSPHRASE_FILE: /tmp/pkgfeed_password_file
@@ -37,13 +43,12 @@ jobs:
           SCAILX_VERSION=$(grep 'SCAILX_VERSION' scailx_$RELEASE.yaml | cut -d '=' -f2 | xargs)
           ln -sf -T scailx_$RELEASE.yaml .config.yaml
           echo "OUT=$SCAILX_VERSION" >> $GITHUB_OUTPUT
-      - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v6
-        with:
-          gpg_private_key: ${{ secrets.PKGFEED_GPG_PRIVATEKEY }}
-          passphrase: ${{ secrets.PKGFEED_GPG_PASSWORD }}
-      - run:
+      - name: Setup GPG passphrase
+        run:
           mkdir -p `dirname "$PACKAGE_FEED_GPG_PASSPHRASE_FILE"` && echo "${{ secrets.PKGFEED_GPG_PASSWORD }}" > $PACKAGE_FEED_GPG_PASSPHRASE_FILE
+      - name: import gpg key for ppa signature
+        run: |
+          echo "${{ secrets.PKGFEED_GPG_PRIVATEKEY }}" | gpg --batch --import --yes --passphrase-file $PACKAGE_FEED_GPG_PASSPHRASE_FILE
       - name: import ssh key for private repos
         run: |
           eval `ssh-agent -s`
@@ -128,6 +133,7 @@ jobs:
           echo "BUILD_DATE=$(date)" >> build_${{ github.sha }}.txt
           echo "TARGET_IMAGE=scailx-ml" >> build_${{ github.sha }}.txt
           echo "DISTRO=${{ steps.bbvars.outputs.DISTRO }}" >> build_${{ github.sha }}.txt
+          echo "RELEASE=$RELEASE" >> build_${{ github.sha }}.txt
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
