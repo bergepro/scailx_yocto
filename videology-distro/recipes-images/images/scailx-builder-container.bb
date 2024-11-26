@@ -26,7 +26,7 @@ IMAGE_FEATURES = " \
     ssh-server-openssh \
     hwcodecs \
     splash \
-    weston x11 \
+    weston \
     tools-testapps \
 "
 IMAGE_LINGUAS = ""
