@@ -118,6 +118,12 @@ do_add_scailx_version () {
 }
 IMAGE_PREPROCESS_COMMAND += ";do_add_scailx_version;"
 
+do_scailx_fix_ssh_check_keys () {
+    # fix sshd_check_keys script
+    sed -i -e 's/\[ -f \$key \] \&\& continue/\[ -s \$key \] \&\& continue/' ${IMAGE_ROOTFS}${libexecdir}/openssh/sshd_check_keys
+}
+ROOTFS_POSTPROCESS_COMMAND += ";do_scailx_fix_ssh_check_keys;"
+
 # do_swuimage:append() {
 #     import libconf, io, json
 #     swd = os.path.join(d.getVar('S') ,'sw-description')
