@@ -11,7 +11,7 @@ export IMAGE_BASENAME = "scailx-bootstrap-image"
 
 IMAGE_NAME_SUFFIX ?= "-${SCAILX_VERSION}"
 
-IMAGE_FSTYPES = "uuuimg wic"
+IMAGE_FSTYPES = "wic.uuuimg"
 
 # avoid circular dependencies
 EXTRA_IMAGEDEPENDS = ""

@@ -12,32 +12,22 @@
 
 inherit image_types
 
-CARD_ONDISK = "mmcblk"
-ZIP_FOLDER = "${WORKDIR}/uuuimg"
-
-do_image_uuuimg[depends] += "parted-native:do_populate_sysroot zip-native:do_populate_sysroot ${IMAGE_BOOTLOADER}:do_deploy virtual/kernel:do_build"
-# u-boot-imx-uuu:do_deploy u-boot-imx:do_deploy "
-
 UUU_VERSION = "1.2.91"
-
-IMAGE_TYPEDEP:uuuimg = "wic"
-CARD_IMAGE ?= "${IMAGE_LINK_NAME}.wic"
 
 UBOOT_UUU ?= "${DEPLOY_DIR_IMAGE}/imx-boot-karo-mfg"
 UBOOT     ?= "${DEPLOY_DIR_IMAGE}/imx-boot"
 
-
-IMAGE_CMD:uuuimg () {
-
+uuuimg_proc () {
     cd ${IMGDEPLOYDIR}
+    ZIP_FOLDER=$(mktemp -d -t uuuimg-XXXXXX)
 
-    for f in $UUU ${CARD_IMAGE} ${UBOOT_UUU} ${UBOOT}; do
+    for f in $UUU $1 ${UBOOT_UUU} ${UBOOT}; do
         install "$f" ${ZIP_FOLDER}
     done
 
     uboot=`basename ${UBOOT}`
     uboot_uuu=`basename ${UBOOT_UUU}`
-    image=`basename ${CARD_IMAGE}`
+    image=`basename $1`
 
     echo "uuu_version ${UUU_VERSION}
 
@@ -51,7 +41,11 @@ FB: ucmd saveenv
 FB: ucmd mmc partconf \${emmc_dev} \${emmc_boot_ack} 1 0
 FB: done
 " > "${ZIP_FOLDER}/uuu.auto"
-    zip -r -1 -j "${IMAGE_NAME}-uuu.zip" "${ZIP_FOLDER}"
+    zip -r -1 -j "$2" "${ZIP_FOLDER}"
+    rm -rf "${ZIP_FOLDER}"
 }
 
-do_image_uuuimg[cleandirs] += "${ZIP_FOLDER}"
+CONVERSIONTYPES += "uuuimg"
+CONVERSION_DEPENDS_uuuimg = "parted-native zip-native ${IMAGE_BOOTLOADER} virtual/kernel"
+CONVERSION_CMD:uuuimg="uuuimg_proc ${IMAGE_NAME}.${type} ${IMAGE_NAME}${IMAGE_NAME_SUFFIX}.zip"
+
