@@ -5,7 +5,7 @@ import os, psutil
 import socket
 import logging
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 led_path = "/sys/devices/platform/scailx_leds/leds/scailx_status_led/brightness"
