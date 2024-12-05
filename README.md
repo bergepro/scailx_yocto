@@ -5,7 +5,7 @@ Videology Yocto builder
 
 ## Prerequisites
 
-- Linux PC (tested on `Ubuntu 22.04 LTS`) with [default host requirements](https://docs.yoctoproject.org/4.0.5/brief-yoctoprojectqs/index.html#build-host-packages)
+- Linux PC (tested on `Ubuntu 22.04 LTS`) with [default host requirements](https://docs.yoctoproject.org/5.0.5/brief-yoctoprojectqs/index.html#build-host-packages)
 - or use [docker](https://docs.docker.com/install/linux/docker-ce/ubuntu/)
 - [kas](https://kas.readthedocs.io/): `sudo pip3 install kas`
 
